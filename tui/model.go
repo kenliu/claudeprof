@@ -43,12 +43,11 @@ const (
 	tabTiming
 	tabTokens
 	tabTools
-	tabSuggestions
 	tabAIAnalysis
 	tabCount
 )
 
-var tabLabels = []string{"Overview", "Timeline", "Timing", "Tokens", "Tools", "Suggestions", "AI Analysis"}
+var tabLabels = []string{"Overview", "Timeline", "Timing", "Tokens", "Tools", "AI Analysis"}
 
 // ---- Async messages ----
 
@@ -353,9 +352,6 @@ func (m Model) profileKey(key string) (tea.Model, tea.Cmd) {
 		m.activeTab = tabTools
 		m.scrollOffset = 0
 	case "6":
-		m.activeTab = tabSuggestions
-		m.scrollOffset = 0
-	case "7":
 		m.activeTab = tabAIAnalysis
 		m.scrollOffset = 0
 	case "a":
@@ -524,15 +520,13 @@ func (m Model) viewProfile() string {
 		content = m.viewTokens(contentH)
 	case tabTools:
 		content = m.viewTools(contentH)
-	case tabSuggestions:
-		content = m.viewSuggestions(contentH)
 	case tabAIAnalysis:
 		content = m.viewAIAnalysis(contentH)
 	}
 
 	b.WriteString(content)
 
-	footer := "tab/shift-tab switch  1-7 jump  a ai  ↑↓/jk scroll  r report  esc back  q quit"
+	footer := "tab/shift-tab switch  1-6 jump  a ai  ↑↓/jk scroll  r report  esc back  q quit"
 	if m.activeTab == tabTiming {
 		flameHint := "f flame"
 		if m.timingFlame {
@@ -652,25 +646,31 @@ func (m Model) viewOverview() string {
 		}
 	}
 
-	// Suggestion summary
+	// Suggestions inline
 	b.WriteString("\n")
-	high, med := 0, 0
-	for _, sg := range a.Suggestions {
-		switch sg.Level {
-		case "high":
-			high++
-		case "medium":
-			med++
-		}
-	}
-	if high > 0 {
-		b.WriteString(fmt.Sprintf("  %s  %d high-priority suggestion(s) — press 5 to view\n",
-			styleError.Render("●"), high))
-	} else if med > 0 {
-		b.WriteString(fmt.Sprintf("  %s  %d suggestion(s) — press 5 to view\n",
-			styleWarn.Render("●"), med))
-	} else {
+	b.WriteString("  " + styleBold.Render("Suggestions") + "\n\n")
+	if len(a.Suggestions) == 0 {
 		b.WriteString(fmt.Sprintf("  %s  Session looks efficient\n", styleGood.Render("●")))
+	} else {
+		for _, sg := range a.Suggestions {
+			iconStyle := styleGood
+			switch sg.Level {
+			case "high":
+				iconStyle = styleError
+			case "medium":
+				iconStyle = styleWarn
+			}
+			b.WriteString(fmt.Sprintf("  %s  %s  %s\n",
+				iconStyle.Render("●"),
+				styleBold.Render(sg.Title),
+				styleMuted.Render("["+sg.Category+"]"),
+			))
+			wrapped := wordWrap(sg.Detail, m.width-8)
+			for _, line := range wrapped {
+				b.WriteString(styleMuted.Render("     "+line) + "\n")
+			}
+			b.WriteString("\n")
+		}
 	}
 
 	return b.String()
@@ -1246,58 +1246,6 @@ func (m Model) viewTools(contentH int) string {
 		bar := lipgloss.NewStyle().Foreground(clrAccent).Render(analyzer.Bar(pct, barW))
 		b.WriteString(fmt.Sprintf("  %-20s  %s  %6d  %4.0f%%\n",
 			name, bar, count, sharePct))
-	}
-
-	return b.String()
-}
-
-// ---- Suggestions tab ----
-
-func (m Model) viewSuggestions(contentH int) string {
-	a := m.analysis
-	var b strings.Builder
-
-	b.WriteString("\n")
-	b.WriteString("  " + styleBold.Render("Optimization Suggestions") + "\n\n")
-
-	pageH := contentH - 4
-	linesPerSug := 5 // Approximate
-	maxSug := pageH / linesPerSug
-	if maxSug < 1 {
-		maxSug = 1
-	}
-
-	start := m.scrollOffset
-	if start >= len(a.Suggestions) {
-		start = max(0, len(a.Suggestions)-1)
-	}
-	end := start + maxSug
-	if end > len(a.Suggestions) {
-		end = len(a.Suggestions)
-	}
-
-	for i := start; i < end; i++ {
-		sg := a.Suggestions[i]
-		iconStyle := styleGood
-		switch sg.Level {
-		case "high":
-			iconStyle = styleError
-		case "medium":
-			iconStyle = styleWarn
-		}
-
-		b.WriteString(fmt.Sprintf("  %s  %s  %s\n",
-			iconStyle.Render("●"),
-			styleBold.Render(sg.Title),
-			styleMuted.Render("["+sg.Category+"]"),
-		))
-
-		// Word-wrap detail to width.
-		wrapped := wordWrap(sg.Detail, m.width-8)
-		for _, line := range wrapped {
-			b.WriteString(styleMuted.Render("     "+line) + "\n")
-		}
-		b.WriteString("\n")
 	}
 
 	return b.String()
