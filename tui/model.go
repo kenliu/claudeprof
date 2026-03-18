@@ -367,7 +367,7 @@ func (m Model) profileKey(key string) (tea.Model, tea.Cmd) {
 			m.scrollOffset = 0
 			return m, runClaudeAnalysis(m.analysis)
 		}
-	case "A":
+	case "d":
 		if m.analysis != nil && !m.aiLoading {
 			m.aiLoading = true
 			m.aiDeep = true
@@ -540,7 +540,7 @@ func (m Model) viewProfile() string {
 
 	b.WriteString(content)
 
-	footer := "tab/shift-tab switch  1-6 jump  a ai  A deep-ai  ↑↓/jk scroll  r report  esc back  q quit"
+	footer := "tab/shift-tab switch  1-6 jump  a ai  d deep-ai  ↑↓/jk scroll  r report  esc back  q quit"
 	if m.activeTab == tabTiming {
 		flameHint := "f flame"
 		if m.timingFlame {
@@ -1269,7 +1269,7 @@ func (m Model) viewTools(contentH int) string {
 
 func (m Model) viewAIAnalysis(contentH int) string {
 	var b strings.Builder
-	modeHint := "a · standard  A · deep"
+	modeHint := "a · standard  d · deep"
 	if m.aiLoading {
 		if m.aiDeep {
 			modeHint = "deep analysis running…"
@@ -1277,9 +1277,9 @@ func (m Model) viewAIAnalysis(contentH int) string {
 			modeHint = "analysis running…"
 		}
 	} else if m.aiDeep && m.aiText != "" {
-		modeHint = "deep analysis  ·  press a for standard  A to re-run"
+		modeHint = "deep analysis  ·  press a for standard  d to re-run"
 	} else if !m.aiDeep && m.aiText != "" {
-		modeHint = "standard analysis  ·  press A for deep  a to re-run"
+		modeHint = "standard analysis  ·  press d for deep  a to re-run"
 	}
 	b.WriteString("\n")
 	b.WriteString("  " + styleBold.Render("AI Analysis") + "  " +
