@@ -1,0 +1,42 @@
+You are analyzing a Claude Code session. Here is the profiling data:
+
+Session ID: {{.Session.ID}}
+Working directory: {{.Session.CWD}}
+Model: {{.Session.Model}}
+Duration: {{.Duration}}
+Total turns: {{.TurnCount}}
+Total tool calls: {{.ToolCallCount}}
+Compacted: {{.Session.HasSummary}}
+
+## Token Usage
+Total tokens: {{.TotalTokens}}
+Uncached input: {{.TotalInput}}
+Cache reads: {{.TotalCacheRead}}
+Cache creation: {{.TotalCacheCreate}}
+Output: {{.TotalOutput}}
+Overall cache hit rate: {{.OverallCacheHitPct}}%
+Average input per turn: {{.AvgInputPerTurn}}
+Average output per turn: {{.AvgOutputPerTurn}}
+{{- if gt .ContextGrowthRate 0.0}}
+Context growth rate (Q1→Q4): {{.ContextGrowthRate}}x
+{{- end}}
+{{- if .ToolLines}}
+
+## Tool Usage
+{{.ToolLines}}
+{{- end}}
+{{- if .TurnLines}}
+
+## Turn-by-turn summary (first 10 turns)
+{{.TurnLines}}
+{{- end}}
+
+## Automated suggestions
+{{.SuggestionLines}}
+
+Please provide a concise analysis of this Claude Code session. Focus on:
+1. What kind of work was being done (based on prompts and tools used)
+2. Efficiency observations (token usage patterns, cache effectiveness)
+3. Any specific actionable recommendations beyond the automated suggestions
+
+Keep your response to 3-5 paragraphs.
