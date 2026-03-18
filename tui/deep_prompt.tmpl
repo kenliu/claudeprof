@@ -4,7 +4,7 @@ You are analyzing a Claude Code session to identify inefficiencies and problems.
 Working directory: {{.CWD}}
 Model: {{.Model}}
 Duration: {{.Duration}} | Turns: {{.TurnCount}} | Total tokens: {{.TotalTokens}}
-Cache hit rate: {{.CacheHitPct}}%{{if gt .ContextGrowthRate 0.0}} | Context growth: {{.ContextGrowthRate}}x{{end}}
+Cache hit rate: {{.CacheHitPct}}%{{if .HasGrowth}} | Context growth: {{.ContextGrowthStr}}x{{end}}
 
 ## Notable Events (pre-computed signals)
 {{- if .Notable}}

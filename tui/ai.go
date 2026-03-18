@@ -209,20 +209,20 @@ func buildDeepAnalysisPrompt(a *analyzer.Analysis) string {
 	}
 
 	data := map[string]any{
-		"CWD":               s.CWD,
-		"Model":             s.Model,
-		"Duration":          analyzer.FormatDuration(s.Duration()),
-		"TurnCount":         a.TurnCount,
-		"TotalTokens":       analyzer.FormatTokens(a.TotalTokens()),
-		"CacheHitPct":       fmt.Sprintf("%.1f", a.OverallCacheHitPct),
-		"ContextGrowthRate": growthStr,
-		"Notable":           a.Notable,
-		"SelectedTurns":     selected,
+		"CWD":              s.CWD,
+		"Model":            s.Model,
+		"Duration":         analyzer.FormatDuration(s.Duration()),
+		"TurnCount":        a.TurnCount,
+		"TotalTokens":      analyzer.FormatTokens(a.TotalTokens()),
+		"CacheHitPct":      fmt.Sprintf("%.1f", a.OverallCacheHitPct),
+		"HasGrowth":        a.ContextGrowthRate > 0,
+		"ContextGrowthStr": growthStr,
+		"Notable":          a.Notable,
+		"SelectedTurns":    selected,
 	}
 
 	funcMap := template.FuncMap{
 		"add": func(a, b int) int { return a + b },
-		"gt":  func(a float64, b float64) bool { return a > b },
 	}
 	tmpl := template.Must(template.New("deep").Funcs(funcMap).Parse(deepPromptTemplate))
 	var out bytes.Buffer
