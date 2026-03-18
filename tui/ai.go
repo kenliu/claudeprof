@@ -17,6 +17,9 @@ import (
 //go:embed prompt.tmpl
 var promptTemplate string
 
+//go:embed deep_prompt.tmpl
+var deepPromptTemplate string
+
 type aiAnalysisMsg struct {
 	text string
 	err  error
@@ -106,6 +109,125 @@ func buildAnalysisPrompt(a *analyzer.Analysis) string {
 	if err := tmpl.Execute(&out, data); err != nil {
 		// Fallback: return raw template text so the caller still gets something.
 		return promptTemplate
+	}
+	return out.String()
+}
+
+// ---- Deep AI analysis ----
+
+type selectedTurn struct {
+	TurnNum    int
+	StopReason string
+	UserText   string
+	ToolCalls  string   // pre-formatted: "Bash(cmd), Read(path)"
+	ToolErrors []string // error result texts
+	AsstText   string
+}
+
+func runDeepClaudeAnalysis(a *analyzer.Analysis) tea.Cmd {
+	return func() tea.Msg {
+		prompt := buildDeepAnalysisPrompt(a)
+		cmd := exec.Command("claude", "-p", prompt)
+		var out, errBuf bytes.Buffer
+		cmd.Stdout = &out
+		cmd.Stderr = &errBuf
+		if err := cmd.Run(); err != nil {
+			return aiAnalysisMsg{err: fmt.Errorf("%w\n%s", err, strings.TrimSpace(errBuf.String()))}
+		}
+		return aiAnalysisMsg{text: out.String()}
+	}
+}
+
+func buildDeepAnalysisPrompt(a *analyzer.Analysis) string {
+	s := a.Session
+
+	// Determine which turn indices are "interesting".
+	interestingTurns := make(map[int]bool)
+	for _, ev := range a.Notable {
+		interestingTurns[ev.TurnIdx] = true
+	}
+	// Also include first, last, and any turn with a real user message.
+	n := len(a.Turns)
+	if n > 0 {
+		interestingTurns[0] = true
+		interestingTurns[n-1] = true
+	}
+	for i, tm := range a.Turns {
+		if strings.TrimSpace(tm.UserText) != "" {
+			interestingTurns[i] = true
+		}
+	}
+
+	// Build selected turns list.
+	var selected []selectedTurn
+	for i, tm := range a.Turns {
+		if !interestingTurns[i] {
+			continue
+		}
+
+		// Format tool calls as "Name(key), Name(key)".
+		var callParts []string
+		for j, name := range tm.ToolNames {
+			key := ""
+			if j < len(tm.ToolInputKeys) {
+				key = tm.ToolInputKeys[j]
+			}
+			if key != "" {
+				callParts = append(callParts, fmt.Sprintf("%s(%s)", name, analyzer.Truncate(key, 50)))
+			} else {
+				callParts = append(callParts, name)
+			}
+		}
+
+		// Collect error texts.
+		var errs []string
+		for _, tr := range tm.ToolResults {
+			if tr.IsError {
+				errs = append(errs, tr.Text)
+			}
+		}
+
+		// Get the raw turn's stop reason.
+		stopReason := ""
+		if i < len(s.Turns) {
+			stopReason = s.Turns[i].StopReason
+		}
+
+		selected = append(selected, selectedTurn{
+			TurnNum:    i + 1,
+			StopReason: stopReason,
+			UserText:   analyzer.Truncate(strings.TrimSpace(tm.UserText), 500),
+			ToolCalls:  strings.Join(callParts, ", "),
+			ToolErrors: errs,
+			AsstText:   analyzer.Truncate(strings.TrimSpace(tm.AsstText), 200),
+		})
+	}
+
+	growthStr := ""
+	if a.ContextGrowthRate > 0 {
+		growthStr = fmt.Sprintf("%.1f", a.ContextGrowthRate)
+	}
+
+	data := map[string]any{
+		"CWD":               s.CWD,
+		"Model":             s.Model,
+		"Duration":          analyzer.FormatDuration(s.Duration()),
+		"TurnCount":         a.TurnCount,
+		"TotalTokens":       analyzer.FormatTokens(a.TotalTokens()),
+		"CacheHitPct":       fmt.Sprintf("%.1f", a.OverallCacheHitPct),
+		"ContextGrowthRate": growthStr,
+		"Notable":           a.Notable,
+		"SelectedTurns":     selected,
+	}
+
+	funcMap := template.FuncMap{
+		"add": func(a, b int) int { return a + b },
+		"gt":  func(a float64, b float64) bool { return a > b },
+	}
+	tmpl := template.Must(template.New("deep").Funcs(funcMap).Parse(deepPromptTemplate))
+	var out bytes.Buffer
+	if err := tmpl.Execute(&out, data); err != nil {
+		return deepPromptTemplate
 	}
 	return out.String()
 }

@@ -61,6 +61,15 @@ type ContentBlock struct {
 	Name      string          `json:"name,omitempty"`
 	Input     json.RawMessage `json:"input,omitempty"`
 	ToolUseID string          `json:"tool_use_id,omitempty"`
+	IsError   bool            `json:"is_error,omitempty"`
+	Content   json.RawMessage `json:"content,omitempty"` // tool_result content (string or block array)
+}
+
+// ToolResult captures the output of a tool call returned in a user message.
+type ToolResult struct {
+	ToolUseID string
+	IsError   bool
+	Text      string // First 300 chars of result text
 }
 
 // AssistantMsg is the API response object embedded in an assistant entry.
@@ -81,9 +90,10 @@ type UserMsg struct {
 
 // ToolCall is a tool invocation extracted from an assistant message.
 type ToolCall struct {
-	ID    string
-	Name  string
-	Input json.RawMessage
+	ID       string
+	Name     string
+	Input    json.RawMessage
+	InputKey string // Key parameter extracted from Input (command, file path, pattern, etc.)
 }
 
 // Turn represents a single assistant API call with its preceding context.
@@ -102,6 +112,9 @@ type Turn struct {
 	// Timing fields
 	RequestTime   time.Time // Timestamp of the user/tool-result message that triggered this call
 	IsToolTrigger bool      // True when triggered by tool results, false when triggered by human
+
+	// Tool result feedback (populated from subsequent user message)
+	ToolResults []ToolResult
 }
 
 // Session is a fully parsed Claude Code session.
@@ -278,6 +291,11 @@ func buildTurns(entries []RawEntry, sess *Session) []Turn {
 			if text := extractUserText(msg); text != "" && !isToolResult(msg) {
 				lastUserText = text
 			}
+			// Attach tool results to the preceding assistant turn.
+			if lastIsToolResult && len(turns) > 0 {
+				results := extractToolResults(msg)
+				turns[len(turns)-1].ToolResults = append(turns[len(turns)-1].ToolResults, results...)
+			}
 
 		case "assistant":
 			var msg AssistantMsg
@@ -359,11 +377,105 @@ func extractToolCalls(msg AssistantMsg) []ToolCall {
 	for _, b := range msg.Content {
 		if b.Type == "tool_use" {
 			calls = append(calls, ToolCall{
-				ID:    b.ID,
-				Name:  b.Name,
-				Input: b.Input,
+				ID:       b.ID,
+				Name:     b.Name,
+				Input:    b.Input,
+				InputKey: extractToolInputKey(b.Name, b.Input),
 			})
 		}
 	}
 	return calls
+}
+
+// extractToolInputKey pulls the most meaningful parameter from a tool's JSON
+// input — the command string, file path, search pattern, etc.
+func extractToolInputKey(toolName string, input json.RawMessage) string {
+	if len(input) == 0 {
+		return ""
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(input, &m); err != nil {
+		return ""
+	}
+
+	var fields []string
+	switch toolName {
+	case "Bash":
+		fields = []string{"command"}
+	case "Read", "Write", "Edit", "NotebookEdit":
+		fields = []string{"file_path", "path"}
+	case "Glob":
+		fields = []string{"pattern"}
+	case "Grep":
+		fields = []string{"pattern"}
+	case "WebFetch":
+		fields = []string{"url"}
+	case "WebSearch":
+		fields = []string{"query"}
+	default:
+		fields = []string{"file_path", "path", "command", "pattern", "query"}
+	}
+
+	for _, f := range fields {
+		v, ok := m[f]
+		if !ok {
+			continue
+		}
+		var s string
+		if err := json.Unmarshal(v, &s); err == nil && s != "" {
+			runes := []rune(s)
+			if len(runes) > 120 {
+				s = string(runes[:119]) + "…"
+			}
+			return s
+		}
+	}
+	return ""
+}
+
+// extractToolResults pulls tool_result content blocks from a user message.
+func extractToolResults(msg UserMsg) []ToolResult {
+	var blocks []ContentBlock
+	if err := json.Unmarshal(msg.Content, &blocks); err != nil {
+		return nil
+	}
+	var results []ToolResult
+	for _, b := range blocks {
+		if b.Type != "tool_result" {
+			continue
+		}
+		text := extractToolResultText(b)
+		runes := []rune(text)
+		if len(runes) > 300 {
+			text = string(runes[:299]) + "…"
+		}
+		results = append(results, ToolResult{
+			ToolUseID: b.ToolUseID,
+			IsError:   b.IsError,
+			Text:      text,
+		})
+	}
+	return results
+}
+
+// extractToolResultText gets the text content from a tool_result block.
+// The content field can be a plain string or an array of content blocks.
+func extractToolResultText(b ContentBlock) string {
+	if len(b.Content) > 0 {
+		var s string
+		if err := json.Unmarshal(b.Content, &s); err == nil {
+			return s
+		}
+		var blocks []ContentBlock
+		if err := json.Unmarshal(b.Content, &blocks); err == nil {
+			var parts []string
+			for _, sub := range blocks {
+				if sub.Type == "text" && sub.Text != "" {
+					parts = append(parts, sub.Text)
+				}
+			}
+			return strings.Join(parts, "\n")
+		}
+	}
+	return b.Text
 }

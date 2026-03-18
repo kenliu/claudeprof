@@ -12,6 +12,14 @@ import (
 	"claudeprof/session"
 )
 
+// NotableEvent is a pre-computed signal flagged during analysis for use in
+// deep AI analysis prompts.
+type NotableEvent struct {
+	TurnIdx int    // 0-based
+	Kind    string // "permission-block" | "tool-error" | "repeated-tool" | "file-churn" | "context-spike" | "long-tool-chain"
+	Detail  string
+}
+
 // TurnMetrics holds computed metrics for a single assistant turn.
 type TurnMetrics struct {
 	TurnIdx      int
@@ -19,6 +27,8 @@ type TurnMetrics struct {
 	UserText     string
 	AsstText     string
 	ToolNames    []string
+	ToolInputKeys []string              // Parallel to ToolNames — key parameter per call
+	ToolResults   []session.ToolResult  // Results from this turn's tool calls
 	Input        int // uncached input + cache creation
 	Output       int
 	CacheRead    int
@@ -97,6 +107,9 @@ type Analysis struct {
 
 	// Suggestions
 	Suggestions []Suggestion
+
+	// Notable events for deep AI analysis
+	Notable []NotableEvent
 }
 
 // TotalTokens returns the total tokens consumed in the session.
@@ -173,9 +186,11 @@ func Analyze(sess *session.Session) *Analysis {
 
 		for _, tc := range t.ToolCalls {
 			tm.ToolNames = append(tm.ToolNames, tc.Name)
+			tm.ToolInputKeys = append(tm.ToolInputKeys, tc.InputKey)
 			a.ToolCounts[tc.Name]++
 			a.ToolCallCount++
 		}
+		tm.ToolResults = t.ToolResults
 
 		a.Turns = append(a.Turns, tm)
 
@@ -256,6 +271,7 @@ func Analyze(sess *session.Session) *Analysis {
 	})
 
 	a.Suggestions = computeSuggestions(a, sess)
+	a.Notable = detectNotableEvents(a)
 	return a
 }
 
@@ -396,6 +412,148 @@ func computeSuggestions(a *Analysis, sess *session.Session) []Suggestion {
 	}
 
 	return out
+}
+
+func detectNotableEvents(a *Analysis) []NotableEvent {
+	var events []NotableEvent
+
+	permissionKeywords := []string{
+		"permission", "not allowed", "denied", "EPERM",
+		"Operation not permitted", "Permission denied",
+	}
+
+	// Track (toolName, inputKey) → last turn index seen, for repeat detection.
+	type toolSig struct{ name, key string }
+	lastSeen := make(map[toolSig]int)
+
+	// Track Write/Edit targets → list of turn indices, for file churn detection.
+	fileWrites := make(map[string][]int)
+
+	// Track consecutive tool-triggered turns.
+	consecutiveToolTurns := 0
+
+	for i, tm := range a.Turns {
+		// 1. Permission blocks and tool errors.
+		for _, tr := range tm.ToolResults {
+			if !tr.IsError {
+				continue
+			}
+			isPermission := false
+			for _, kw := range permissionKeywords {
+				if strings.Contains(tr.Text, kw) {
+					isPermission = true
+					break
+				}
+			}
+			if isPermission {
+				events = append(events, NotableEvent{
+					TurnIdx: i,
+					Kind:    "permission-block",
+					Detail:  Truncate(tr.Text, 120),
+				})
+			} else {
+				events = append(events, NotableEvent{
+					TurnIdx: i,
+					Kind:    "tool-error",
+					Detail:  Truncate(tr.Text, 120),
+				})
+			}
+		}
+
+		// 2. Repeated tool calls (same tool + same key within 5 turns).
+		for j, name := range tm.ToolNames {
+			key := ""
+			if j < len(tm.ToolInputKeys) {
+				key = tm.ToolInputKeys[j]
+			}
+			if key == "" {
+				continue
+			}
+			sig := toolSig{name, key}
+			if prevIdx, ok := lastSeen[sig]; ok && i-prevIdx <= 5 {
+				events = append(events, NotableEvent{
+					TurnIdx: i,
+					Kind:    "repeated-tool",
+					Detail:  fmt.Sprintf("%s called again with same input %q (prev turn %d)", name, Truncate(key, 60), prevIdx+1),
+				})
+			}
+			lastSeen[sig] = i
+		}
+
+		// 3. File churn: record Write/Edit targets.
+		for j, name := range tm.ToolNames {
+			if name != "Write" && name != "Edit" {
+				continue
+			}
+			key := ""
+			if j < len(tm.ToolInputKeys) {
+				key = tm.ToolInputKeys[j]
+			}
+			if key != "" {
+				fileWrites[key] = append(fileWrites[key], i)
+			}
+		}
+
+		// 4. Context spike: input tokens > 2× previous turn (both non-trivial).
+		if i > 0 {
+			prev := a.Turns[i-1]
+			prevIn := prev.Input + prev.CacheRead
+			curIn := tm.Input + tm.CacheRead
+			if prevIn > 2000 && curIn > prevIn*2 {
+				events = append(events, NotableEvent{
+					TurnIdx: i,
+					Kind:    "context-spike",
+					Detail: fmt.Sprintf("input jumped %s → %s (%.1f×)",
+						FormatTokens(prevIn), FormatTokens(curIn), float64(curIn)/float64(prevIn)),
+				})
+			}
+		}
+
+		// 5. Long tool chain: >5 tool calls in one turn.
+		if len(tm.ToolNames) > 5 {
+			events = append(events, NotableEvent{
+				TurnIdx: i,
+				Kind:    "long-tool-chain",
+				Detail:  fmt.Sprintf("%d tool calls in a single turn", len(tm.ToolNames)),
+			})
+		}
+
+		// 6. Many consecutive tool-triggered turns (no user interaction).
+		if tm.IsToolTrigger {
+			consecutiveToolTurns++
+			if consecutiveToolTurns == 8 {
+				events = append(events, NotableEvent{
+					TurnIdx: i,
+					Kind:    "long-tool-chain",
+					Detail:  "8+ consecutive tool-triggered turns with no user interaction",
+				})
+			}
+		} else {
+			consecutiveToolTurns = 0
+		}
+	}
+
+	// Post-scan: emit file churn events (3+ writes to same path).
+	for path, indices := range fileWrites {
+		if len(indices) < 3 {
+			continue
+		}
+		strs := make([]string, len(indices))
+		for k, idx := range indices {
+			strs[k] = fmt.Sprintf("%d", idx+1)
+		}
+		events = append(events, NotableEvent{
+			TurnIdx: indices[0],
+			Kind:    "file-churn",
+			Detail: fmt.Sprintf("%q written/edited %d times (turns %s)",
+				Truncate(path, 50), len(indices), strings.Join(strs, ", ")),
+		})
+	}
+
+	sort.Slice(events, func(i, j int) bool {
+		return events[i].TurnIdx < events[j].TurnIdx
+	})
+	return events
 }
 
 // --- Formatting helpers ---

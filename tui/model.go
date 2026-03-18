@@ -148,6 +148,7 @@ type Model struct {
 	aiText    string // rendered for display
 	aiErr     error
 	aiLoading bool
+	aiDeep    bool // true when last analysis was deep mode
 
 	// Transient
 	statusMsg   string
@@ -321,6 +322,7 @@ func (m Model) profileKey(key string) (tea.Model, tea.Cmd) {
 		m.aiText = ""
 		m.aiErr = nil
 		m.aiLoading = false
+		m.aiDeep = false
 	case "f":
 		if m.activeTab == tabTiming {
 			m.timingFlame = !m.timingFlame
@@ -357,12 +359,24 @@ func (m Model) profileKey(key string) (tea.Model, tea.Cmd) {
 	case "a":
 		if m.analysis != nil && !m.aiLoading {
 			m.aiLoading = true
+			m.aiDeep = false
 			m.aiRaw = ""
 			m.aiText = ""
 			m.aiErr = nil
 			m.activeTab = tabAIAnalysis
 			m.scrollOffset = 0
 			return m, runClaudeAnalysis(m.analysis)
+		}
+	case "A":
+		if m.analysis != nil && !m.aiLoading {
+			m.aiLoading = true
+			m.aiDeep = true
+			m.aiRaw = ""
+			m.aiText = ""
+			m.aiErr = nil
+			m.activeTab = tabAIAnalysis
+			m.scrollOffset = 0
+			return m, runDeepClaudeAnalysis(m.analysis)
 		}
 	case "up", "k":
 		if m.scrollOffset > 0 {
@@ -526,7 +540,7 @@ func (m Model) viewProfile() string {
 
 	b.WriteString(content)
 
-	footer := "tab/shift-tab switch  1-6 jump  a ai  ↑↓/jk scroll  r report  esc back  q quit"
+	footer := "tab/shift-tab switch  1-6 jump  a ai  A deep-ai  ↑↓/jk scroll  r report  esc back  q quit"
 	if m.activeTab == tabTiming {
 		flameHint := "f flame"
 		if m.timingFlame {
@@ -1255,9 +1269,21 @@ func (m Model) viewTools(contentH int) string {
 
 func (m Model) viewAIAnalysis(contentH int) string {
 	var b strings.Builder
+	modeHint := "a · standard  A · deep"
+	if m.aiLoading {
+		if m.aiDeep {
+			modeHint = "deep analysis running…"
+		} else {
+			modeHint = "analysis running…"
+		}
+	} else if m.aiDeep && m.aiText != "" {
+		modeHint = "deep analysis  ·  press a for standard  A to re-run"
+	} else if !m.aiDeep && m.aiText != "" {
+		modeHint = "standard analysis  ·  press A for deep  a to re-run"
+	}
 	b.WriteString("\n")
 	b.WriteString("  " + styleBold.Render("AI Analysis") + "  " +
-		styleMuted.Render("press a to run · uses claude -p") + "\n\n")
+		styleMuted.Render(modeHint) + "\n\n")
 
 	switch {
 	case m.aiLoading:
