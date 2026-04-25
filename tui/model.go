@@ -298,7 +298,7 @@ func (m Model) pickerKey(key string) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) clampPickerScroll() {
-	visibleRows := m.height - headerLines - footerLines - 5
+	visibleRows := (m.height - headerLines - footerLines - 5) / 2
 	if visibleRows < 1 {
 		visibleRows = 1
 	}
@@ -445,14 +445,14 @@ func (m Model) viewPicker() string {
 	}
 
 	// Column header
-	projW := max(w-52, 20)
+	projW := max(w-62, 20)
 	header := styleMuted.Render(
-		fmt.Sprintf("  %-*s  %-16s  %6s  %8s", projW, "PROJECT", "DATE", "SIZE", ""),
+		fmt.Sprintf("  %-*s  %-8s  %-16s  %6s", projW, "PROJECT", "SESSION", "DATE", "SIZE"),
 	)
 	b.WriteString(header + "\n")
 	b.WriteString(styleDivider.Render("  "+strings.Repeat("─", w-4)) + "\n")
 
-	visibleRows := m.height - headerLines - footerLines - 4
+	visibleRows := (m.height - headerLines - footerLines - 4) / 2
 	if visibleRows < 1 {
 		visibleRows = 1
 	}
@@ -465,16 +465,26 @@ func (m Model) viewPicker() string {
 	for i := m.pickerScroll; i < end; i++ {
 		s := m.discovered[i]
 		proj := truncate(s.ProjectPath, projW)
+		sha := s.SessionID
+		if len(sha) > 8 {
+			sha = sha[:8]
+		}
 		date := formatRelTime(s.ModTime)
 		size := formatSize(s.Size)
 
-		line := fmt.Sprintf("  %-*s  %-16s  %6s", projW, proj, date, size)
+		line := fmt.Sprintf("  %-*s  %-8s  %-16s  %6s", projW, proj, sha, date, size)
 
 		if i == m.pickerPos {
 			b.WriteString(styleSelected.Render("▶ " + line[2:]) + "\n")
 		} else {
 			b.WriteString(line + "\n")
 		}
+
+		prompt := s.Prompt
+		if prompt == "" {
+			prompt = "(no prompt)"
+		}
+		b.WriteString(styleMuted.Render("     ↳ "+truncate(prompt, w-8)) + "\n")
 	}
 
 	if len(m.discovered) > visibleRows {

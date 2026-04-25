@@ -153,6 +153,7 @@ type DiscoveredSession struct {
 	ProjectPath string // Best-effort decoded from directory name
 	ModTime     time.Time
 	Size        int64
+	Prompt      string // First user message snippet
 }
 
 // DiscoverSessions finds all session JSONL files under the given Claude config dir.
@@ -188,6 +189,7 @@ func DiscoverSessions(claudeDir string) ([]DiscoveredSession, error) {
 				ProjectPath: projectPath,
 				ModTime:     info.ModTime(),
 				Size:        info.Size(),
+				Prompt:      peekFirstPrompt(f),
 			})
 		}
 	}
@@ -197,6 +199,46 @@ func DiscoverSessions(claudeDir string) ([]DiscoveredSession, error) {
 		return sessions[i].ModTime.After(sessions[j].ModTime)
 	})
 	return sessions, nil
+}
+
+// peekFirstPrompt reads just enough of a JSONL file to extract the first
+// human user message text, without parsing the entire file.
+func peekFirstPrompt(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		var e RawEntry
+		if err := json.Unmarshal([]byte(line), &e); err != nil {
+			continue
+		}
+		if e.Type != "user" {
+			continue
+		}
+		var msg UserMsg
+		if err := json.Unmarshal(e.Message, &msg); err != nil {
+			continue
+		}
+		if isToolResult(msg) {
+			continue
+		}
+		text := extractUserText(msg)
+		text = strings.Join(strings.Fields(text), " ")
+		if text != "" {
+			return text
+		}
+	}
+	return ""
 }
 
 // decodeProjectDir converts a Claude Code encoded project directory name back
